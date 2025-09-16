@@ -1,0 +1,22 @@
+
+{
+  "name": "StockerZ: Sistem Administrasi Gudang",
+  "short_name": "StockerZ",
+  "description": "Aplikasi web modern untuk mengelola inventaris gudang secara efisien. Memungkinkan pengguna untuk melacak, menambah, mengedit, dan menghapus produk, serta melihat dasbor analitik.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#475569",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}

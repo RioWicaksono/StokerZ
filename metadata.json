@@ -1,0 +1,7 @@
+{
+  "name": "StockerZ: Warehouse Management System",
+  "description": "A modern web application to efficiently manage warehouse inventory. It allows users to track, add, edit, and delete products, and view an analytics dashboard.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
