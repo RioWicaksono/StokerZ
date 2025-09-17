@@ -155,7 +155,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // FIX: Moved addToast before its usage to fix "used before its declaration" error.
   const addToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     const id = Date.now();
     setToasts(prevToasts => [...prevToasts, { id, message, type }]);
@@ -167,48 +166,189 @@ const App: React.FC = () => {
   // Real-time subscriptions
   useEffect(() => {
     if (!currentUser) return;
-    
-    const channels: RealtimeChannel[] = [];
 
-    const productsChannel = supabase.channel('realtime-products');
+    const channels: RealtimeChannel[] = [];
+    
+    const sortByName = <T extends { name: string }>(arr: T[]) => arr.sort((a, b) => a.name.localeCompare(b.name));
+    const sortByDateDesc = <T extends { requestDate: string } | { date: string } | { timestamp: string }>(arr: T[]) => arr.sort((a, b) => {
+        const dateA = new Date('requestDate' in a ? a.requestDate : 'date' in a ? a.date : a.timestamp).getTime();
+        const dateB = new Date('requestDate' in b ? b.requestDate : 'date' in b ? b.date : b.timestamp).getTime();
+        return dateB - dateA;
+    });
+    const sortByUsername = (arr: User[]) => arr.sort((a, b) => a.username.localeCompare(b.username));
+
+    // Products
+    const productsChannel = supabase.channel('realtime-products-all');
     productsChannel
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'products' }, (payload) => {
-        setProducts(prev => [payload.new as Product, ...prev]);
-        addToast(`New product added: ${payload.new.name}`, 'success');
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'products' }, (payload) => {
-        setProducts(prev => prev.map(p => p.id === payload.new.id ? payload.new as Product : p));
-        setRecentlyUpdatedProductId(payload.new.id);
-        setTimeout(() => setRecentlyUpdatedProductId(null), 2000);
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'products' }, (payload) => {
-        setProducts(prev => prev.filter(p => p.id !== payload.old.id));
-        addToast(`Product removed: ${payload.old.name}`, 'success');
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
+        switch (payload.eventType) {
+          case 'INSERT':
+            setProducts(prev => {
+              if (prev.some(p => p.id === payload.new.id)) return prev;
+              addToast(`New product added: ${payload.new.name}`, 'success');
+              return sortByName([...prev, payload.new as Product]);
+            });
+            break;
+          case 'UPDATE':
+            setProducts(prev => sortByName(prev.map(p => p.id === payload.new.id ? payload.new as Product : p)));
+            setRecentlyUpdatedProductId(payload.new.id);
+            setTimeout(() => setRecentlyUpdatedProductId(null), 2000);
+            break;
+          case 'DELETE':
+            setProducts(prev => {
+              addToast(`Product removed: ${payload.old.name}`, 'success');
+              return prev.filter(p => p.id !== payload.old.id);
+            });
+            break;
+          default:
+            break;
+        }
       })
       .subscribe();
     channels.push(productsChannel);
-    
-    const requestsChannel = supabase.channel('realtime-requests');
-    requestsChannel
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'requests' }, () => {
-        if (currentView !== 'requests') {
-          setHasNewRequests(true);
+
+    // Vendors
+    const vendorsChannel = supabase.channel('realtime-vendors-all');
+    vendorsChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors' }, (payload) => {
+         switch (payload.eventType) {
+          case 'INSERT':
+            setVendors(prev => {
+              if (prev.some(v => v.id === payload.new.id)) return prev;
+              addToast(`New vendor added: ${payload.new.name}`, 'success');
+              return sortByName([...prev, payload.new as Vendor]);
+            });
+            break;
+          case 'UPDATE':
+            setVendors(prev => sortByName(prev.map(v => v.id === payload.new.id ? payload.new as Vendor : v)));
+            break;
+          case 'DELETE':
+            setVendors(prev => {
+                addToast(`Vendor removed: ${payload.old.name}`, 'success');
+                return prev.filter(v => v.id !== payload.old.id);
+            });
+            break;
+          default:
+            break;
         }
-        addToast("A new item request has been submitted.", 'success');
+      })
+      .subscribe();
+    channels.push(vendorsChannel);
+
+    // Requests
+    const requestsChannel = supabase.channel('realtime-requests-all');
+    requestsChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, (payload) => {
+        switch (payload.eventType) {
+          case 'INSERT':
+            setRequests(prev => {
+              if (prev.some(r => r.id === payload.new.id)) return prev;
+              if (currentView !== 'requests') setHasNewRequests(true);
+              addToast("A new item request has been submitted.", 'success');
+              return sortByDateDesc([...prev, payload.new as Request]);
+            });
+            break;
+          case 'UPDATE':
+            setRequests(prev => sortByDateDesc(prev.map(r => r.id === payload.new.id ? payload.new as Request : r)));
+            break;
+          case 'DELETE':
+            setRequests(prev => prev.filter(r => r.id !== payload.old.id));
+            break;
+          default:
+            break;
+        }
       })
       .subscribe();
     channels.push(requestsChannel);
       
-    const poChannel = supabase.channel('realtime-purchase-orders');
+    // Purchase Orders
+    const poChannel = supabase.channel('realtime-purchase-orders-all');
     poChannel
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'purchase_orders' }, () => {
-        if (currentView !== 'purchase-orders') {
-          setHasNewPurchaseOrders(true);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchase_orders' }, (payload) => {
+        switch (payload.eventType) {
+          case 'INSERT':
+            setPurchaseOrders(prev => {
+              if (prev.some(p => p.id === payload.new.id)) return prev;
+              if (currentView !== 'purchase-orders') setHasNewPurchaseOrders(true);
+              addToast("A new purchase order has been created.", 'success');
+              return sortByDateDesc([...prev, payload.new as PurchaseOrder]);
+            });
+            break;
+          case 'UPDATE':
+            setPurchaseOrders(prev => sortByDateDesc(prev.map(p => p.id === payload.new.id ? payload.new as PurchaseOrder : p)));
+            break;
+          case 'DELETE':
+            setPurchaseOrders(prev => prev.filter(p => p.id !== payload.old.id));
+            break;
+          default:
+            break;
         }
-         addToast("A new purchase order has been created.", 'success');
       })
       .subscribe();
     channels.push(poChannel);
+
+    // Users
+    const usersChannel = supabase.channel('realtime-users-all');
+    usersChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
+        switch (payload.eventType) {
+          case 'INSERT':
+            setUsers(prev => {
+              if (prev.some(u => u.id === payload.new.id)) return prev;
+              return sortByUsername([...prev, payload.new as User]);
+            });
+            break;
+          case 'UPDATE':
+            setUsers(prev => sortByUsername(prev.map(u => u.id === payload.new.id ? payload.new as User : u)));
+            if (currentUser?.id === payload.new.id) {
+              setCurrentUser(payload.new as User);
+            }
+            break;
+          case 'DELETE':
+            setUsers(prev => prev.filter(u => u.id !== payload.old.id));
+            break;
+          default:
+            break;
+        }
+      })
+      .subscribe();
+    channels.push(usersChannel);
+
+    // Stock Adjustments
+    const adjustmentsChannel = supabase.channel('realtime-stock-adjustments-all');
+    adjustmentsChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_adjustments' }, (payload) => {
+        switch (payload.eventType) {
+          case 'INSERT':
+            setStockAdjustments(prev => {
+              if (prev.some(a => a.id === payload.new.id)) return prev;
+              return sortByDateDesc([...prev, payload.new as StockAdjustment]);
+            });
+            break;
+          case 'UPDATE':
+            setStockAdjustments(prev => sortByDateDesc(prev.map(a => a.id === payload.new.id ? payload.new as StockAdjustment : a)));
+            break;
+          case 'DELETE':
+            setStockAdjustments(prev => prev.filter(a => a.id !== payload.old.id));
+            break;
+          default:
+            break;
+        }
+      })
+      .subscribe();
+    channels.push(adjustmentsChannel);
+
+    // Audit Logs (Append-only)
+    const auditLogsChannel = supabase.channel('realtime-audit-logs-all');
+    auditLogsChannel
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, (payload) => {
+        setAuditLogs(prev => {
+          if (prev.some(l => l.id === payload.new.id)) return prev;
+          return sortByDateDesc([...prev, payload.new as AuditLog]);
+        });
+      })
+      .subscribe();
+    channels.push(auditLogsChannel);
 
     return () => {
       channels.forEach(channel => supabase.removeChannel(channel));
@@ -366,11 +506,9 @@ const App: React.FC = () => {
       action,
       details,
     };
-    const { data, error } = await supabase.from('audit_logs').insert(newLog).select().single();
+    const { error } = await supabase.from('audit_logs').insert(newLog);
     if (error) {
       console.error("Failed to save audit log:", error);
-    } else if (data) {
-      setAuditLogs(prev => [data, ...prev]);
     }
   }, [currentUser]);
 
@@ -415,7 +553,6 @@ const App: React.FC = () => {
             const { id, ...updateData } = { ...productData, lastModifiedBy: currentUser.username };
             const { error } = await supabase.from('products').update(updateData).eq('id', id);
             if (error) throw error;
-            // No local state update needed due to real-time subscription
             await handleLogAction('Updated Product', `SKU: ${updateData.sku}, Name: ${updateData.name}`);
             message = `Product "${updateData.name}" was successfully updated.`;
         } else { // Create
@@ -425,7 +562,6 @@ const App: React.FC = () => {
             };
             const { data, error } = await supabase.from('products').insert(newProduct).select().single();
             if (error) throw error;
-            // No local state update needed due to real-time subscription
             await handleLogAction('Created Product', `SKU: ${data.sku}, Name: ${data.name}`);
             message = `Product "${data.name}" was successfully added.`;
         }
@@ -456,11 +592,8 @@ const App: React.FC = () => {
         const { error } = await supabase.from('products').delete().eq('id', idToDelete);
         if (error) throw error;
         
-        setTimeout(() => {
-            // Local state update is handled by real-time, but this keeps the animation smooth
-            setProducts(prevProducts => prevProducts.filter(p => p.id !== idToDelete));
-        }, 500);
-
+        // UI state removal is handled by realtime subscription
+        
         await handleLogAction('Deleted Product', `SKU: ${productToDelete.sku}, Name: ${productToDelete.name}`);
         addToast(`Product "${productToDelete.name}" was successfully deleted.`, 'success');
         handleCloseDeleteModal();
@@ -493,10 +626,7 @@ const App: React.FC = () => {
       const { error } = await supabase.from('products').delete().in('id', productsToDeleteBulk);
       if (error) throw error;
 
-      setTimeout(() => {
-          // Local state update is handled by real-time
-          setProducts(prev => prev.filter(p => !productsToDeleteBulk.includes(p.id)));
-      }, 500);
+      // UI state removal is handled by realtime subscription
 
       await handleLogAction('Bulk Deleted Products', `${productsToDeleteBulk.length} items`);
       addToast(`${productsToDeleteBulk.length} products were successfully deleted.`, 'success');
@@ -534,13 +664,11 @@ const App: React.FC = () => {
             const { id, ...updateData } = payload;
             const { error } = await supabase.from('vendors').update(updateData).eq('id', id);
             if (error) throw error;
-            setVendors(prev => prev.map(v => v.id === id ? { ...v, ...updateData, id } : v));
             await handleLogAction('Updated Vendor', `ID: ${id}, Name: ${updateData.name}`);
             message = `Vendor "${updateData.name}" was successfully updated.`;
         } else {
             const { data, error } = await supabase.from('vendors').insert(payload).select().single();
             if (error) throw error;
-            setVendors(prev => [data, ...prev]);
             await handleLogAction('Created Vendor', `ID: ${data.id}, Name: ${data.name}`);
             message = `Vendor "${data.name}" was successfully added.`;
         }
@@ -570,11 +698,9 @@ const App: React.FC = () => {
         setItemsBeingDeleted(prev => new Set(prev).add(idToDelete));
         const { error } = await supabase.from('vendors').delete().eq('id', idToDelete);
         if (error) throw error;
-
-        setTimeout(() => {
-            setVendors(prevVendors => prevVendors.filter(v => v.id !== idToDelete));
-        }, 500);
-
+        
+        // UI state removal is handled by realtime subscription
+        
         await handleLogAction('Deleted Vendor', `ID: ${vendorToDelete.id}, Name: ${vendorToDelete.name}`);
         addToast(`Vendor "${vendorToDelete.name}" was successfully deleted.`, 'success');
         handleCloseDeleteVendorModal();
@@ -607,10 +733,8 @@ const App: React.FC = () => {
       const { error } = await supabase.from('vendors').delete().in('id', vendorsToDeleteBulk);
       if (error) throw error;
 
-      setTimeout(() => {
-          setVendors(prev => prev.filter(v => !vendorsToDeleteBulk.includes(v.id)));
-      }, 500);
-
+      // UI state removal is handled by realtime subscription
+      
       await handleLogAction('Bulk Deleted Vendors', `${vendorsToDeleteBulk.length} items`);
       addToast(`${vendorsToDeleteBulk.length} vendors were successfully deleted.`, 'success');
       handleCloseBulkDeleteVendorModal();
@@ -649,11 +773,9 @@ const App: React.FC = () => {
     try {
         const { data, error } = await supabase.from('requests').insert(newRequest).select().single();
         if (error) throw error;
-        setRequests(prev => [data, ...prev]);
         await handleLogAction('Created Request', `Product: ${data.productName}, Qty: ${data.quantity}, For: ${data.requestingDivision}`);
         handleCloseRequestModal();
         addToast('New item request has been created.', 'success');
-        // No need to setHasNewRequests here, real-time handles it
     } catch (error) {
         console.error("Failed to save request:", error);
         addToast("Failed to create request due to a database error.", "error");
@@ -666,9 +788,8 @@ const App: React.FC = () => {
           ? { status, collectedBy: user.username, collectionDate: new Date().toISOString() }
           : { status, approvedBy: user.username, actionDate: new Date().toISOString() };
       
-      const { data, error } = await supabase.from('requests').update(updateData).eq('id', requestId).select().single();
+      const { error } = await supabase.from('requests').update(updateData).eq('id', requestId);
       if (error) throw error;
-      setRequests(prev => prev.map(r => r.id === requestId ? data : r));
   }, []);
 
   const handleOpenApproveModal = useCallback((request: Request) => {
@@ -703,7 +824,6 @@ const App: React.FC = () => {
         await updateRequestStatus(requestToAction.id, 'Approved', currentUser);
         
         await handleLogAction('Approved Request', `ID: ${requestToAction.id}, Product: ${requestToAction.productName}`);
-        // No local state update for products needed, handled by real-time
         addToast(`Request for "${requestToAction.productName}" approved. Stock has been updated.`, 'success');
         handleCloseApproveModal();
     } catch (error) {
@@ -786,11 +906,9 @@ const App: React.FC = () => {
     try {
         const { data, error } = await supabase.from('purchase_orders').insert(newPO).select().single();
         if (error) throw error;
-        setPurchaseOrders(prev => [data, ...prev]);
         await handleLogAction('Created Purchase Order', `Product: ${data.productName}, Qty: ${data.quantity}`);
         handleClosePOModal();
         addToast('New purchase order has been created.', 'success');
-        // No need to setHasNewPurchaseOrders here, real-time handles it
     } catch (error) {
         console.error("Failed to save purchase order:", error);
         addToast("Failed to create purchase order due to a database error.", "error");
@@ -800,9 +918,8 @@ const App: React.FC = () => {
   
   const updatePOStatus = useCallback(async (poId: string, status: PurchaseOrderStatus, user: User) => {
       const updateData = { status, approvedBy: user.username, actionDate: new Date().toISOString() };
-      const { data, error } = await supabase.from('purchase_orders').update(updateData).eq('id', poId).select().single();
+      const { error } = await supabase.from('purchase_orders').update(updateData).eq('id', poId);
       if (error) throw error;
-      setPurchaseOrders(prev => prev.map(p => p.id === poId ? data : p));
   }, []);
 
   const handleOpenApprovePOModal = useCallback((po: PurchaseOrder) => {
@@ -888,9 +1005,7 @@ const App: React.FC = () => {
           const { error: productError } = await supabase
             .from('products')
             .update({ quantity: newQuantity, lastUpdated: new Date().toISOString(), lastModifiedBy: currentUser.username })
-            .eq('id', productToUpdate.id)
-            .select()
-            .single();
+            .eq('id', productToUpdate.id);
 
           if (productError) throw productError;
 
@@ -902,9 +1017,6 @@ const App: React.FC = () => {
             .single();
 
           if (poError) throw poError;
-
-          // No need to update local product state due to real-time subscription
-          setPurchaseOrders(prev => prev.map(po => po.id === updatedPO.id ? updatedPO : po));
           
           await handleLogAction('Received Purchase Order', `ID: ${updatedPO.id}, Product: ${updatedPO.productName}, Qty: ${updatedPO.quantity}`);
           addToast(`Stock for "${updatedPO.productName}" has been updated.`, 'success');
@@ -948,14 +1060,9 @@ const App: React.FC = () => {
           const { error: prodError } = await supabase
             .from('products')
             .update({ quantity: newQuantity, lastUpdated: new Date().toISOString(), lastModifiedBy: currentUser.username })
-            .eq('id', productToUpdate.id)
-            .select()
-            .single();
+            .eq('id', productToUpdate.id);
 
           if (prodError) throw prodError;
-
-          setStockAdjustments(prev => [savedAdjustment, ...prev]);
-          // No need to update local product state, real-time handles it.
           
           await handleLogAction('Stock Adjustment', `Product: ${savedAdjustment.productName} (SKU: ${productToUpdate.sku}), Change: ${savedAdjustment.quantityChange}, Reason: ${savedAdjustment.reason}`);
           
@@ -1007,13 +1114,6 @@ const App: React.FC = () => {
       const results = await Promise.all(clearPromises);
       const failed = results.find(res => res.error);
       if (failed) throw failed.error;
-
-      // Both actions now just clear data
-      setProducts([]);
-      setVendors([]);
-      setRequests([]);
-      setPurchaseOrders([]);
-      setStockAdjustments([]);
       
       const successMessage = "All application data has been cleared.";
       await handleLogAction(action === 'reset' ? 'Reset All Data' : 'Cleared All Data', successMessage);
@@ -1086,8 +1186,7 @@ const App: React.FC = () => {
             throw profileError;
         }
 
-        // 5. Success: Update local state and UI.
-        setUsers(prev => [...prev, profileData]);
+        // 5. Success: UI updates via real-time.
         await handleLogAction('Created User', `Username: ${profileData.username}, Role: ${profileData.role}`);
         handleCloseAddUserModal();
         addToast(`User "${profileData.username}" was successfully created.`, 'success');
@@ -1135,7 +1234,6 @@ const App: React.FC = () => {
     try {
         const { data: updatedUser, error } = await supabase.from('users').update({ role: newRole }).eq('id', userId).select().single();
         if (error) throw error;
-        setUsers(prevUsers => prevUsers.map(u => (u.id === userId ? updatedUser : u)));
         await handleLogAction('Updated User Role', `Username: ${updatedUser.username}, New Role: ${newRole}`);
         addToast(`User "${updatedUser.username}" role has been updated to ${newRole}.`, 'success');
     } catch (error) {
@@ -1189,7 +1287,6 @@ const App: React.FC = () => {
       const { error } = await supabase.from('users').delete().eq('id', userToAction.id);
       if (error) throw error;
 
-      setUsers(prev => prev.filter(u => u.id !== userToAction.id));
       await handleLogAction('Deleted User', `Username: ${userToAction.username}`);
       addToast(`User "${userToAction.username}" has been deleted.`, 'success');
       handleCloseDeleteUserModal();
@@ -1228,12 +1325,7 @@ const App: React.FC = () => {
             .single();
 
           if (error) throw error;
-
-          const updatedUsers = users.map(u => (u.id === userId ? updatedUser : u));
-          setUsers(updatedUsers);
-          if (currentUser?.id === userId) {
-              setCurrentUser(updatedUser);
-          }
+          
           await handleLogAction('Updated Profile Picture', `User: ${updatedUser.username}`);
           addToast(`Profile picture updated successfully.`, 'success');
       } catch (error) {
@@ -1241,7 +1333,7 @@ const App: React.FC = () => {
           addToast("Failed to update profile picture due to a database error.", "error");
           throw error;
       }
-  }, [users, currentUser, addToast, handleLogAction]);
+  }, [addToast, handleLogAction]);
   
   const handleUpdatePassword = useCallback(async (currentPassword: string, newPassword: string) => {
     if (!currentUser) {
