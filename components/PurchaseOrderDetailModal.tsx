@@ -15,6 +15,7 @@ const getStatusBadge = (status: PurchaseOrder['status']) => {
     case 'Pending Approval': return 'bg-amber-100 text-amber-800';
     case 'Approved': return 'bg-green-100 text-green-800';
     case 'Rejected': return 'bg-red-100 text-red-800';
+    case 'Received': return 'bg-sky-100 text-sky-800';
     default: return 'bg-slate-100 text-slate-800';
   }
 };
@@ -74,6 +75,13 @@ const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> = ({ isO
               </DetailItem>
             </div>
           )}
+           {purchaseOrder.receivedBy && purchaseOrder.receivedDate && (
+            <div className="sm:col-span-2">
+              <DetailItem label="Received By">
+                <span className="capitalize">{purchaseOrder.receivedBy}</span> on {formatDate(purchaseOrder.receivedDate)}
+              </DetailItem>
+            </div>
+          )}
           <div className="sm:col-span-2">
             <p className="text-sm font-medium text-slate-500">Notes</p>
             <p className="text-slate-800 font-semibold mt-1 whitespace-pre-wrap bg-slate-50 p-3 rounded-lg border border-slate-200 min-h-[50px]">
@@ -95,5 +103,4 @@ const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> = ({ isO
   );
 };
 
-// FIX: Added default export for the component.
 export default PurchaseOrderDetailModal;

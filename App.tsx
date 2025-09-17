@@ -42,8 +42,9 @@ import ProfileSettingsModal from './components/ProfileSettingsModal';
 import OnboardingTour from './components/OnboardingTour';
 import StartTourModal from './components/StartTourModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import ConfirmDeleteUserModal from './components/ConfirmDeleteUserModal';
+import ConfirmResetPasswordModal from './components/ConfirmResetPasswordModal';
 
 
 const App: React.FC = () => {
@@ -143,8 +144,14 @@ const App: React.FC = () => {
             .select('*')
             .eq('id', session.user.id)
             .single();
-          setCurrentUser(profileData || null);
+          // Only set the current user if a profile is found.
+          // This prevents the admin from being logged out when a new user is created,
+          // as the new user's profile doesn't exist yet when onAuthStateChange first fires.
+          if (profileData) {
+            setCurrentUser(profileData);
+          }
         } else {
+          // If there's no session, log the user out.
           setCurrentUser(null);
         }
       }
@@ -169,174 +176,88 @@ const App: React.FC = () => {
 
     const channels: RealtimeChannel[] = [];
     
-    const sortByName = <T extends { name: string }>(arr: T[]) => arr.sort((a, b) => a.name.localeCompare(b.name));
-    const sortByDateDesc = <T extends { requestDate: string } | { date: string } | { timestamp: string }>(arr: T[]) => arr.sort((a, b) => {
-        const dateA = new Date('requestDate' in a ? a.requestDate : 'date' in a ? a.date : a.timestamp).getTime();
-        const dateB = new Date('requestDate' in b ? b.requestDate : 'date' in b ? b.date : b.timestamp).getTime();
+    const sortByName = <T extends { name: string }>(arr: T[]) => [...arr].sort((a, b) => a.name.localeCompare(b.name));
+    const sortByDateDesc = <T extends { requestDate?: string, date?: string, timestamp?: string }>(arr: T[]) => [...arr].sort((a, b) => {
+        const dateA = new Date(a.requestDate || a.date || a.timestamp!).getTime();
+        const dateB = new Date(b.requestDate || b.date || b.timestamp!).getTime();
         return dateB - dateA;
     });
-    const sortByUsername = (arr: User[]) => arr.sort((a, b) => a.username.localeCompare(b.username));
+    const sortByUsername = (arr: User[]) => [...arr].sort((a, b) => a.username.localeCompare(b.username));
+
+    const setupSubscription = <T extends { id: string }>(
+        table: string,
+        setState: React.Dispatch<React.SetStateAction<T[]>>,
+        sortFn: (arr: T[]) => T[],
+        callbacks?: { onInsert?: (newItem: T) => void; onUpdate?: (newItem: T) => void; onDelete?: (oldItem: any) => void; }
+    ) => {
+        const channel = supabase.channel(`realtime-${table}`);
+        channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload: RealtimePostgresChangesPayload<T>) => {
+            const { eventType, new: newRecord, old: oldRecord } = payload;
+            
+            switch (eventType) {
+                case 'INSERT':
+                    setState(prev => {
+                        if (prev.some(item => item.id === newRecord.id)) return prev;
+                        callbacks?.onInsert?.(newRecord);
+                        return sortFn([...prev, newRecord]);
+                    });
+                    break;
+                case 'UPDATE':
+                    setState(prev => sortFn(prev.map(item => item.id === newRecord.id ? newRecord : item)));
+                    callbacks?.onUpdate?.(newRecord);
+                    break;
+                case 'DELETE':
+                    callbacks?.onDelete?.(oldRecord);
+                    setState(prev => prev.filter(item => item.id !== (oldRecord as any).id));
+                    break;
+            }
+        }).subscribe();
+        channels.push(channel);
+    };
 
     // Products
-    const productsChannel = supabase.channel('realtime-products-all');
-    productsChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
-        switch (payload.eventType) {
-          case 'INSERT':
-            setProducts(prev => {
-              if (prev.some(p => p.id === payload.new.id)) return prev;
-              addToast(`New product added: ${payload.new.name}`, 'success');
-              return sortByName([...prev, payload.new as Product]);
-            });
-            break;
-          case 'UPDATE':
-            setProducts(prev => sortByName(prev.map(p => p.id === payload.new.id ? payload.new as Product : p)));
-            setRecentlyUpdatedProductId(payload.new.id);
+    setupSubscription('products', setProducts, sortByName, {
+        onInsert: (item: any) => addToast(`New product added: ${item.name}`, 'success'),
+        onUpdate: (item: any) => {
+            setRecentlyUpdatedProductId(item.id);
             setTimeout(() => setRecentlyUpdatedProductId(null), 2000);
-            break;
-          case 'DELETE':
-            setProducts(prev => {
-              addToast(`Product removed: ${payload.old.name}`, 'success');
-              return prev.filter(p => p.id !== payload.old.id);
-            });
-            break;
-          default:
-            break;
-        }
-      })
-      .subscribe();
-    channels.push(productsChannel);
+        },
+        onDelete: (item: any) => addToast(`Product removed: ${item.name}`, 'success')
+    });
 
     // Vendors
-    const vendorsChannel = supabase.channel('realtime-vendors-all');
-    vendorsChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors' }, (payload) => {
-         switch (payload.eventType) {
-          case 'INSERT':
-            setVendors(prev => {
-              if (prev.some(v => v.id === payload.new.id)) return prev;
-              addToast(`New vendor added: ${payload.new.name}`, 'success');
-              return sortByName([...prev, payload.new as Vendor]);
-            });
-            break;
-          case 'UPDATE':
-            setVendors(prev => sortByName(prev.map(v => v.id === payload.new.id ? payload.new as Vendor : v)));
-            break;
-          case 'DELETE':
-            setVendors(prev => {
-                addToast(`Vendor removed: ${payload.old.name}`, 'success');
-                return prev.filter(v => v.id !== payload.old.id);
-            });
-            break;
-          default:
-            break;
-        }
-      })
-      .subscribe();
-    channels.push(vendorsChannel);
+    setupSubscription('vendors', setVendors, sortByName, {
+        onInsert: (item: any) => addToast(`New vendor added: ${item.name}`, 'success'),
+        onDelete: (item: any) => addToast(`Vendor removed: ${item.name}`, 'success')
+    });
 
     // Requests
-    const requestsChannel = supabase.channel('realtime-requests-all');
-    requestsChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, (payload) => {
-        switch (payload.eventType) {
-          case 'INSERT':
-            setRequests(prev => {
-              if (prev.some(r => r.id === payload.new.id)) return prev;
-              if (currentView !== 'requests') setHasNewRequests(true);
-              addToast("A new item request has been submitted.", 'success');
-              return sortByDateDesc([...prev, payload.new as Request]);
-            });
-            break;
-          case 'UPDATE':
-            setRequests(prev => sortByDateDesc(prev.map(r => r.id === payload.new.id ? payload.new as Request : r)));
-            break;
-          case 'DELETE':
-            setRequests(prev => prev.filter(r => r.id !== payload.old.id));
-            break;
-          default:
-            break;
+    setupSubscription('requests', setRequests, sortByDateDesc, {
+        onInsert: () => {
+            if (currentView !== 'requests') setHasNewRequests(true);
+            addToast("A new item request has been submitted.", 'success');
         }
-      })
-      .subscribe();
-    channels.push(requestsChannel);
-      
-    // Purchase Orders
-    const poChannel = supabase.channel('realtime-purchase-orders-all');
-    poChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchase_orders' }, (payload) => {
-        switch (payload.eventType) {
-          case 'INSERT':
-            setPurchaseOrders(prev => {
-              if (prev.some(p => p.id === payload.new.id)) return prev;
-              if (currentView !== 'purchase-orders') setHasNewPurchaseOrders(true);
-              addToast("A new purchase order has been created.", 'success');
-              return sortByDateDesc([...prev, payload.new as PurchaseOrder]);
-            });
-            break;
-          case 'UPDATE':
-            setPurchaseOrders(prev => sortByDateDesc(prev.map(p => p.id === payload.new.id ? payload.new as PurchaseOrder : p)));
-            break;
-          case 'DELETE':
-            setPurchaseOrders(prev => prev.filter(p => p.id !== payload.old.id));
-            break;
-          default:
-            break;
-        }
-      })
-      .subscribe();
-    channels.push(poChannel);
+    });
 
-    // Users
-    const usersChannel = supabase.channel('realtime-users-all');
-    usersChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
-        switch (payload.eventType) {
-          case 'INSERT':
-            setUsers(prev => {
-              if (prev.some(u => u.id === payload.new.id)) return prev;
-              return sortByUsername([...prev, payload.new as User]);
-            });
-            break;
-          case 'UPDATE':
-            setUsers(prev => sortByUsername(prev.map(u => u.id === payload.new.id ? payload.new as User : u)));
-            if (currentUser?.id === payload.new.id) {
-              setCurrentUser(payload.new as User);
-            }
-            break;
-          case 'DELETE':
-            setUsers(prev => prev.filter(u => u.id !== payload.old.id));
-            break;
-          default:
-            break;
+    // Purchase Orders
+    setupSubscription('purchase_orders', setPurchaseOrders, sortByDateDesc, {
+        onInsert: () => {
+            if (currentView !== 'purchase-orders') setHasNewPurchaseOrders(true);
+            addToast("A new purchase order has been created.", 'success');
         }
-      })
-      .subscribe();
-    channels.push(usersChannel);
+    });
+    
+    // Users
+    setupSubscription('users', setUsers, sortByUsername, {
+        onUpdate: (item) => {
+            if (currentUser?.id === item.id) {
+                setCurrentUser(item);
+            }
+        }
+    });
 
     // Stock Adjustments
-    const adjustmentsChannel = supabase.channel('realtime-stock-adjustments-all');
-    adjustmentsChannel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_adjustments' }, (payload) => {
-        switch (payload.eventType) {
-          case 'INSERT':
-            setStockAdjustments(prev => {
-              if (prev.some(a => a.id === payload.new.id)) return prev;
-              return sortByDateDesc([...prev, payload.new as StockAdjustment]);
-            });
-            break;
-          case 'UPDATE':
-            setStockAdjustments(prev => sortByDateDesc(prev.map(a => a.id === payload.new.id ? payload.new as StockAdjustment : a)));
-            break;
-          case 'DELETE':
-            setStockAdjustments(prev => prev.filter(a => a.id !== payload.old.id));
-            break;
-          default:
-            break;
-        }
-      })
-      .subscribe();
-    channels.push(adjustmentsChannel);
+    setupSubscription('stock_adjustments', setStockAdjustments, sortByDateDesc);
 
     // Audit Logs (Append-only)
     const auditLogsChannel = supabase.channel('realtime-audit-logs-all');
@@ -491,6 +412,7 @@ const App: React.FC = () => {
   const [roleChangeDetails, setRoleChangeDetails] = useState<{ user: User; newRole: UserRole } | null>(null);
   const [isDeleteUserModalOpen, setIsDeleteUserModalOpen] = useState(false);
   const [userToAction, setUserToAction] = useState<User | null>(null);
+  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
 
   // Logout Modal State
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
@@ -595,7 +517,7 @@ const App: React.FC = () => {
         // UI state removal is handled by realtime subscription
         
         await handleLogAction('Deleted Product', `SKU: ${productToDelete.sku}, Name: ${productToDelete.name}`);
-        addToast(`Product "${productToDelete.name}" was successfully deleted.`, 'success');
+        // Toast is now handled by realtime subscription for a more accurate message
         handleCloseDeleteModal();
     } catch (error) {
         console.error("Failed to delete product:", error);
@@ -702,7 +624,7 @@ const App: React.FC = () => {
         // UI state removal is handled by realtime subscription
         
         await handleLogAction('Deleted Vendor', `ID: ${vendorToDelete.id}, Name: ${vendorToDelete.name}`);
-        addToast(`Vendor "${vendorToDelete.name}" was successfully deleted.`, 'success');
+        // Toast is handled by realtime subscription
         handleCloseDeleteVendorModal();
     } catch (error) {
         console.error("Failed to delete vendor:", error);
@@ -1296,6 +1218,33 @@ const App: React.FC = () => {
       throw error;
     }
   }, [userToAction, users, addToast, handleLogAction, handleCloseDeleteUserModal]);
+  
+  const handleOpenResetPasswordModal = useCallback((user: User) => {
+    setUserToAction(user);
+    setIsResetPasswordModalOpen(true);
+  }, []);
+
+  const handleCloseResetPasswordModal = useCallback(() => {
+    setUserToAction(null);
+    setIsResetPasswordModalOpen(false);
+  }, []);
+
+  const handleConfirmResetPassword = useCallback(async () => {
+    if (!userToAction) return;
+
+    const { error } = await supabase.auth.resetPasswordForEmail(userToAction.username, {
+        redirectTo: window.location.origin,
+    });
+
+    if (error) {
+        addToast(`Failed to send reset email: ${error.message}`, "error");
+        throw error;
+    } else {
+        addToast(`Password reset link sent to ${userToAction.username}.`, 'success');
+        await handleLogAction('Reset User Password', `Sent reset link to: ${userToAction.username}`);
+        handleCloseResetPasswordModal();
+    }
+  }, [userToAction, addToast, handleLogAction, handleCloseResetPasswordModal]);
 
 
   // Logout Handlers
@@ -1459,6 +1408,7 @@ const App: React.FC = () => {
             onResetData={() => handleOpenAdminConfirmModal('reset')}
             onClearData={() => handleOpenAdminConfirmModal('clear')}
             onDeleteUser={handleOpenDeleteUserModal}
+            onResetPassword={handleOpenResetPasswordModal}
           />
         );
       case 'audit-log':
@@ -1469,7 +1419,7 @@ const App: React.FC = () => {
       default:
         return <Dashboard products={products} purchaseOrders={purchaseOrders} setCurrentView={handleSetCurrentView} />;
     }
-  }, [currentView, products, vendors, requests, purchaseOrders, users, auditLogs, stockAdjustments, handleOpenModal, handleOpenDeleteModal, handleOpenVendorModal, handleOpenDeleteVendorModal, handleOpenVendorDetailModal, handleOpenApproveModal, handleOpenRejectModal, handleSetCurrentView, handleOpenRequestDetailModal, isLoading, handleOpenAdminConfirmModal, handleOpenAddUserModal, handleOpenApprovePOModal, handleOpenRejectPOModal, handleOpenPODetailModal, handleOpenReceivedPOModal, handleOpenBulkDeleteModal, handleOpenBulkDeleteVendorModal, handleOpenRoleChangeModal, handleOpenCollectedModal, currentUser, itemsBeingDeleted, handleOpenBarcodeScanner, initialSearchTerm, recentlyUpdatedProductId, handleOpenDeleteUserModal]);
+  }, [currentView, products, vendors, requests, purchaseOrders, users, auditLogs, stockAdjustments, handleOpenModal, handleOpenDeleteModal, handleOpenVendorModal, handleOpenDeleteVendorModal, handleOpenVendorDetailModal, handleOpenApproveModal, handleOpenRejectModal, handleSetCurrentView, handleOpenRequestDetailModal, isLoading, handleOpenAdminConfirmModal, handleOpenAddUserModal, handleOpenApprovePOModal, handleOpenRejectPOModal, handleOpenPODetailModal, handleOpenReceivedPOModal, handleOpenBulkDeleteModal, handleOpenBulkDeleteVendorModal, handleOpenRoleChangeModal, handleOpenCollectedModal, currentUser, itemsBeingDeleted, handleOpenBarcodeScanner, initialSearchTerm, recentlyUpdatedProductId, handleOpenDeleteUserModal, handleOpenResetPasswordModal]);
 
   if (!sessionChecked) {
     return (
@@ -1716,6 +1666,14 @@ const App: React.FC = () => {
             isOpen={isDeleteUserModalOpen}
             onClose={handleCloseDeleteUserModal}
             onConfirm={handleConfirmDeleteUser}
+            user={userToAction}
+        />
+      )}
+       {isResetPasswordModalOpen && userToAction && (
+        <ConfirmResetPasswordModal
+            isOpen={isResetPasswordModalOpen}
+            onClose={handleCloseResetPasswordModal}
+            onConfirm={handleConfirmResetPassword}
             user={userToAction}
         />
       )}

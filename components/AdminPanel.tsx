@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { formatNumber } from '../utils/helpers';
-import { CubeIcon, VendorIcon, RequestIcon, WarningIcon, PlusIcon, UserCircleIcon, SortIcon, SortUpIcon, SortDownIcon, ScaleIcon, DeleteIcon } from './icons/Icons';
+import { CubeIcon, VendorIcon, RequestIcon, WarningIcon, PlusIcon, UserCircleIcon, SortIcon, SortUpIcon, SortDownIcon, ScaleIcon, DeleteIcon, KeyIcon } from './icons/Icons';
 import { User, UserRole } from '../types';
 
 interface AdminPanelProps {
@@ -17,6 +17,7 @@ interface AdminPanelProps {
   onResetData: () => void;
   onClearData: () => void;
   onDeleteUser: (user: User) => void;
+  onResetPassword: (user: User) => void;
 }
 
 const StatCard: React.FC<{ icon: React.ReactNode; title: string; value: string; }> = ({ icon, title, value }) => (
@@ -32,7 +33,7 @@ const StatCard: React.FC<{ icon: React.ReactNode; title: string; value: string; 
 type SortableUserKey = 'username' | 'role';
 type SortDirection = 'asc' | 'desc';
 
-const AdminPanel: React.FC<AdminPanelProps> = ({ stats, users, currentUser, onAddUser, onUpdateUserRole, onResetData, onClearData, onDeleteUser }) => {
+const AdminPanel: React.FC<AdminPanelProps> = ({ stats, users, currentUser, onAddUser, onUpdateUserRole, onResetData, onClearData, onDeleteUser, onResetPassword }) => {
   const [sortConfig, setSortConfig] = useState<{ key: SortableUserKey; direction: SortDirection }>({ key: 'username', direction: 'asc' });
 
   const sortedUsers = useMemo(() => {
@@ -149,6 +150,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ stats, users, currentUser, onAd
                             </td>
                             <td className="px-6 py-4">
                                 <div className="flex items-center gap-4">
+                                    <button
+                                        onClick={() => onResetPassword(user)}
+                                        disabled={!canModify}
+                                        className="text-sky-600 hover:text-sky-800 disabled:text-gray-300 disabled:cursor-not-allowed"
+                                        title="Reset Password"
+                                        aria-label={`Reset password for ${user.username}`}
+                                    >
+                                        <KeyIcon className="w-5 h-5" />
+                                    </button>
                                     <button
                                         onClick={() => onDeleteUser(user)}
                                         disabled={!canDelete}
